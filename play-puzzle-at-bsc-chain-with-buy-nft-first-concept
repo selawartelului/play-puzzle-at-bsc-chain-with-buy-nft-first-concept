@@ -1,0 +1,112 @@
+
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.20;
+
+import "@openzeppelin/contracts/token/ERC721/ERC721.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+
+contract PuzzleGame is ERC721, Ownable, ReentrancyGuard {
+
+    uint256 public nftPrice = 0.01 ether;
+    uint256 public nextTokenId = 1;
+    uint256 public nextPuzzleId = 1;
+
+    struct Puzzle {
+        bytes32 answerHash;
+        uint256 reward;
+        bool active;
+    }
+
+    mapping(uint256 => Puzzle) public puzzles;
+    mapping(address => mapping(uint256 => bool)) public solved;
+
+    event NFTPurchased(address indexed player, uint256 tokenId);
+    event PuzzleCreated(uint256 puzzleId, uint256 reward);
+    event PuzzleSolved(address indexed player, uint256 puzzleId);
+
+    constructor()
+        ERC721("Puzzle Game Pass", "PGPASS")
+        Ownable(msg.sender)
+    {}
+
+    // Buy NFT to unlock the game
+    function buyNFT() external payable nonReentrant {
+        require(msg.value == nftPrice, "Incorrect BNB amount");
+
+        uint256 tokenId = nextTokenId++;
+
+        _safeMint(msg.sender, tokenId);
+
+        emit NFTPurchased(msg.sender, tokenId);
+    }
+
+    // Owner creates a puzzle
+    function createPuzzle(
+        string calldata answer,
+        uint256 reward
+    ) external onlyOwner {
+
+        require(reward > 0, "Invalid reward");
+
+        uint256 id = nextPuzzleId++;
+
+        puzzles[id] = Puzzle({
+            answerHash: keccak256(bytes(answer)),
+            reward: reward,
+            active: true
+        });
+
+        emit PuzzleCreated(id, reward);
+    }
+
+    // Add BNB to reward pool
+    receive() external payable {}
+
+    // Play puzzle
+    function solvePuzzle(
+        uint256 puzzleId,
+        string calldata answer
+    ) external nonReentrant {
+
+        require(balanceOf(msg.sender) > 0, "Buy NFT first");
+
+        Puzzle storage puzzle = puzzles[puzzleId];
+
+        require(puzzle.active, "Puzzle inactive");
+        require(!solved[msg.sender][puzzleId], "Already solved");
+
+        require(
+            keccak256(bytes(answer)) == puzzle.answerHash,
+            "Wrong answer"
+        );
+
+        require(
+            address(this).balance >= puzzle.reward,
+            "Insufficient reward pool"
+        );
+
+        solved[msg.sender][puzzleId] = true;
+
+        uint256 reward = puzzle.reward;
+        puzzle.active = false;
+
+        (bool success, ) = payable(msg.sender).call{value: reward}("");
+        require(success, "Reward transfer failed");
+
+        emit PuzzleSolved(msg.sender, puzzleId);
+    }
+
+    // Update NFT price
+    function setNFTPrice(uint256 newPrice) external onlyOwner {
+        nftPrice = newPrice;
+    }
+
+    // Withdraw contract balance
+    function withdraw() external onlyOwner nonReentrant {
+        uint256 amount = address(this).balance;
+
+        (bool success, ) = payable(owner()).call{value: amount}("");
+        require(success, "Withdraw failed");
+    }
+}
